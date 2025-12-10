@@ -1,7 +1,6 @@
 #include "tasksys.h"
 #include <thread>
 
-
 IRunnable::~IRunnable() {}
 
 ITaskSystem::ITaskSystem(int num_threads) {}
@@ -89,7 +88,7 @@ void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
     // method in Part A.  The implementation provided below runs all
     // tasks sequentially on the calling thread.
     //
-    std::mutex* mutex;
+    std::mutex* mutex = new std::mutex();
     int curr_task = 0;
 
     for (int i = 0; i < num_threads; i++) {
@@ -129,22 +128,120 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
+    num_threads_ = num_threads;
+    // state_ = new ThreadState();
+    sysinfo_mtx_ = new std::mutex();
+    thread_pool_ = new std::thread[num_threads];
+    runnable_ = nullptr;
+    curr_task_id_ = 0;
+    num_finished_tasks_ = 0;
+    num_total_tasks_ = 0;
+    initiated = false;
+    finished = false;
+    end_ = false;
+
+    for(int i = 0 ; i < num_threads ; i++) {
+        thread_pool_[i] = std::thread(&TaskSystemParallelThreadPoolSpinning::spinningThread, this);
+    }
 }
 
-TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {}
+TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
+
+    end_ = true;
+    for (int i = 0 ; i < num_threads_ ; i++) {
+        thread_pool_[i].join();
+    }
+
+    // delete state_;
+    delete sysinfo_mtx_;
+    delete[] thread_pool_;
+}
+
+void TaskSystemParallelThreadPoolSpinning::spinningThread() {
+
+    while (!end_) {
+
+        bool is_initiated = false;
+        bool is_finished = false;
+
+        sysinfo_mtx_->lock();
+        is_initiated = initiated;
+        is_finished = finished;
+        sysinfo_mtx_->unlock();
+
+        if(!is_initiated || is_finished) continue;
+
+        int curr_task_id;
+
+        sysinfo_mtx_->lock();
+        is_finished = finished;
+        sysinfo_mtx_->unlock();
+
+        while (!is_finished) {
+
+            sysinfo_mtx_->lock();
+            curr_task_id = curr_task_id_;
+
+            if(runnable_ == nullptr || end_ == true) {
+                sysinfo_mtx_->unlock();
+                break;
+            }
+            if(curr_task_id >= num_total_tasks_) { 
+                sysinfo_mtx_->unlock();
+                continue;
+            }
+
+            curr_task_id_++;
+            sysinfo_mtx_->unlock();
+
+            runnable_->runTask(curr_task_id, num_total_tasks_);
+
+            sysinfo_mtx_->lock();
+            num_finished_tasks_++;
+            is_finished = finished;
+            sysinfo_mtx_->unlock();
+        }
+    
+    }
+
+}
 
 void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
 
+    int num_finished_tasks;
 
+    sysinfo_mtx_->lock();
+    num_total_tasks_ = num_total_tasks;
+    runnable_ = runnable;
+    curr_task_id_ = 0;
+    num_finished_tasks_ = 0;
+    num_finished_tasks = num_finished_tasks_;
+    initiated = true;
+    finished = false;
+    sysinfo_mtx_->unlock();
+
+    
+    while (num_finished_tasks < num_total_tasks) {
+        sysinfo_mtx_->lock();
+        num_finished_tasks = num_finished_tasks_;
+        sysinfo_mtx_->unlock();
+    }
+
+    sysinfo_mtx_->lock();
+    finished = true;
+    initiated = false;
+
+    num_total_tasks_ = 0;
+    curr_task_id_ = 0;
+    num_finished_tasks_ = 0;
+    runnable_ = nullptr;
+    sysinfo_mtx_->unlock();
     //
     // TODO: CS149 students will modify the implementation of this
     // method in Part A.  The implementation provided below runs all
     // tasks sequentially on the calling thread.
     //
 
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
-    }
 }
 
 TaskID TaskSystemParallelThreadPoolSpinning::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
