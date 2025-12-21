@@ -272,6 +272,21 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
+
+    num_threads_ = num_threads;
+    thread_pool_ = new std::thread[num_threads];
+    mtx_ = new std::mutex();
+    cv_ = new std::condition_variable();
+    wakeup_mtx_ = new std::mutex();
+
+    runnable_ = nullptr;
+    curr_task_id_ = 0;
+    num_finished_tasks_ = 0;
+    num_total_tasks_ = 0;
+    initiated = false;
+    finished = false;
+    end_ = false;
+
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
@@ -281,10 +296,68 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
+
+    end_ = true;
+    for(int i = 0 ; i < num_threads_ ; i++) {
+        thread_pool_[i].join();
+    }
+
+    delete[] thread_pool_;
+    delete mtx_;
+    delete cv_;
+    delete wakeup_mtx_;
+}
+
+void TaskSystemParallelThreadPoolSleeping::sleepingThread() {
+    bool end = false;
+    mtx_->lock();
+    end = end_;
+    if(end) {
+        mtx_->unlock();
+        return;
+    }
+    mtx_->unlock();
+
+    while (!end) {
+        // inspect system task remaining and fetch task id
+        mtx_->lock();
+        int curr_task_id = curr_task_id_;
+        IRunnable* runnable = runnable_;
+
+        std::unique_lock<std::mutex> lk(*wakeup_mtx_);
+        if(!initiated || finished || curr_task_id >= num_total_tasks_) {
+            mtx_->unlock();
+
+            lk.unlock();
+            cv_->notify_one();
+            cv_->wait(lk, [this] {
+                    mtx_->lock();
+                    bool cond = (initiated && !finished && curr_task_id_ < num_finished_tasks_) || end_;
+                    mtx_->unlock();
+                    return cond;
+                }
+            );
+        }
+
+        mtx_->lock();
+        curr_task_id = curr_task_id_;
+        if(curr_task_id < num_finished_tasks_) curr_task_id_++;
+        mtx_->unlock();
+        // end inspection
+
+        // run task
+        if(curr_task_id < num_finished_tasks_) runnable->runTask(curr_task_id, num_total_tasks_);
+        mtx_->lock();
+        if(curr_task_id < num_finished_tasks_) num_finished_tasks_++;
+        end = end_;
+        mtx_->unlock();
+        // end running and updating system info
+    }
+    
+
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
-
 
     //
     // TODO: CS149 students will modify the implementation of this
@@ -292,9 +365,36 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
     // tasks sequentially on the calling thread.
     //
 
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
+    mtx_->lock();
+
+    runnable_ = runnable;
+    num_total_tasks_ = num_total_tasks;
+    curr_task_id_ = 0;
+    num_finished_tasks_ = 0;
+    initiated = true;
+    finished = false;
+
+    mtx_->unlock();
+
+    cv_->notify_all();
+
+    mtx_->lock();
+
+    while(num_finished_tasks_ < num_total_tasks_) {
+        mtx_->unlock();
+        std::unique_lock<std::mutex> lk(*wakeup_mtx_);
+        cv_->wait(lk, [this] {return num_finished_tasks_ == num_total_tasks_;});
+
+        mtx_->lock();
     }
+
+    finished = true;
+    initiated = false;
+    mtx_->unlock();
+    
+    mtx_->lock();
+
+
 }
 
 TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
