@@ -4,6 +4,7 @@
 #include "itasksys.h"
 #include <mutex>
 #include <thread>
+#include <atomic>
 
 /*
  * TaskSystemSerial: This class is the student's implementation of a
@@ -42,21 +43,6 @@ class TaskSystemParallelSpawn: public ITaskSystem {
         std::thread* thread_pool_;
 };
 
-class ThreadState {
-    public:
-        std::condition_variable* cv;
-        std::mutex* mtx;
-
-        ThreadState() {
-            cv = new std::condition_variable;
-            mtx = new std::mutex;
-        }
-        ~ThreadState() {
-            delete cv;
-            delete mtx;
-        }
-};
-
 /*
  * TaskSystemParallelThreadPoolSpinning: This class is the student's
  * implementation of a parallel task execution engine that uses a
@@ -77,13 +63,12 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
         int num_threads_;
         std::thread* thread_pool_;
         std::mutex* sysinfo_mtx_;
-        // ThreadState* state_;
         IRunnable* runnable_;
         int curr_task_id_;
         int num_finished_tasks_;
         int num_total_tasks_;
-        bool initiated;
-        bool finished;
+        bool initiated_;
+        bool finished_;
         bool end_;
 };
 
@@ -107,7 +92,6 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         int num_threads_;
         std::thread* thread_pool_;
         std::mutex* mtx_;
-        std::mutex* wakeup_mtx_;
         std::condition_variable* cv_;
         IRunnable* runnable_;
 
